@@ -22,6 +22,19 @@
 #define D6 RD6
 #define D7 RD7
 
+// DHT11 Data Pin
+#define DHT11_PIN RB1
+
+// Output Pins
+#define RED_LED    RB0
+#define YELLOW_LED RB2
+#define GREEN_LED  RB3
+#define BUZZER     RB4
+#define PUMP       RB6  // Pump control pin
+
+// Soil moisture threshold (calibrate this value)
+#define SOIL_MOISTURE_THRESHOLD 400
+
 // Function Prototypes
 void LCD_Command(unsigned char);
 void LCD_Char(unsigned char);
@@ -29,19 +42,136 @@ void LCD_Init(void);
 void LCD_String(const char*);
 void LCD_Clear(void);
 
-void main(void) {
-    TRISD = 0x00;
-    LCD_Init();
+void DHT11_Start(void);
+uint8_t DHT11_CheckResponse(void);
+uint8_t DHT11_ReadByte(void);
 
-    while (1) {
+unsigned int ADC_Read(unsigned char channel);
+
+// Global variables
+uint8_t temp_int = 0, hum_int = 0;
+unsigned int soil_moisture = 0;
+
+void main(void) {
+    // Configure pins
+    TRISB1 = 1;     // DHT11 data input
+    TRISB0 = 0;     // Red LED output
+    TRISB2 = 0;     // Yellow LED output
+    TRISB3 = 0;     // Green LED output
+    TRISB4 = 0;     // Buzzer output
+    TRISB6 = 0;     // Pump control output
+    TRISA = 0xFF;   // PORTA as inputs for ADC (AN0)
+    TRISD = 0x00;   // PORTD as outputs for LCD
+
+    // Initial outputs off
+    RED_LED = 0;
+    YELLOW_LED = 0;
+    GREEN_LED = 0;
+    BUZZER = 0;
+    PUMP = 0;
+
+    LCD_Init();
+    __delay_ms(1000);
+
+    char buffer[16];
+
+    while(1) {
+        // Read DHT11 sensor
+        DHT11_Start();
+        if (DHT11_CheckResponse()) {
+            hum_int = DHT11_ReadByte();
+            DHT11_ReadByte(); // humidity decimal ignored
+            temp_int = DHT11_ReadByte();
+            DHT11_ReadByte(); // temperature decimal ignored
+            DHT11_ReadByte(); // checksum ignored
+        }
+
+        // Read soil moisture from ADC (AN0)
+        soil_moisture = ADC_Read(0);
+
+        // Display temperature and humidity on LCD first line
         LCD_Clear();
-        LCD_String("Hello World!");
-        __delay_ms(2000);
+        LCD_String("T:");
+        sprintf(buffer, "%dC H:%d%%", temp_int, hum_int);
+        LCD_String(buffer);
+
+        // Display soil status and pump status on second line
+        LCD_Command(0xC0);
+        LCD_String("Soil:");
+        if (soil_moisture > SOIL_MOISTURE_THRESHOLD) { // Inverted logic
+            LCD_String("Dry  ");
+            PUMP = 1; // Pump ON
+        } else {
+            LCD_String("Wet  ");
+            PUMP = 0; // Pump OFF
+        }
+
+        // Temperature LED and buzzer logic
+        if (temp_int < 25) {
+            GREEN_LED = 1;
+            YELLOW_LED = 0;
+            RED_LED = 0;
+            BUZZER = 0;
+        } else if (temp_int == 25) {
+            GREEN_LED = 0;
+            YELLOW_LED = 1;
+            RED_LED = 0;
+            BUZZER = 0;
+        } else {
+            GREEN_LED = 0;
+            YELLOW_LED = 0;
+            RED_LED = 1;
+            BUZZER = 1;
+        }
+
+        __delay_ms(1000); // Update every 1 second
     }
 }
 
-// ========================== LCD Functions ==========================
+// ADC read function for selected channel (0-7)
+unsigned int ADC_Read(unsigned char channel) {
+    ADCON0 = (channel << 2) | 1;  // Select channel and enable ADC
+    ADCON1 = 0x80;                // Right justified, Vref = VDD
+    __delay_ms(2);                // Acquisition time
+    ADCON0bits.GO = 1;            // Start conversion
+    while (ADCON0bits.GO);        // Wait for conversion completion
+    return ((ADRESH << 8) + ADRESL);
+}
 
+// DHT11 sensor functions
+void DHT11_Start(void) {
+    TRISB1 = 0;
+    DHT11_PIN = 0;
+    __delay_ms(18);
+    DHT11_PIN = 1;
+    __delay_us(30);
+    TRISB1 = 1;
+}
+
+uint8_t DHT11_CheckResponse(void) {
+    uint8_t response = 0;
+    __delay_us(40);
+    if (DHT11_PIN == 0) {
+        __delay_us(80);
+        if (DHT11_PIN == 1) response = 1;
+        __delay_us(40);
+    }
+    return response;
+}
+
+uint8_t DHT11_ReadByte(void) {
+    uint8_t i, byte = 0;
+    for (i = 0; i < 8; i++) {
+        while (!DHT11_PIN);
+        __delay_us(30);
+        if (DHT11_PIN == 1)
+            byte |= (1 << (7 - i));
+        while (DHT11_PIN);
+    }
+    return byte;
+}
+
+// LCD control functions
 void LCD_Command(unsigned char cmd) {
     RS = 0;
     D4 = (cmd >> 4) & 1;
@@ -91,74 +221,4 @@ void LCD_String(const char *str) {
 void LCD_Clear(void) {
     LCD_Command(0x01);
     __delay_ms(2);
-} 
-
-// Add these at the top with previous Stage 1 code
-#define DHT11_PIN RB1
-uint8_t temp_int = 0, hum_int = 0;
-
-void DHT11_Start(void);
-uint8_t DHT11_CheckResponse(void);
-uint8_t DHT11_ReadByte(void);
-
-void main(void) {
-    TRISB1 = 1;
-    TRISD = 0x00;
-    LCD_Init();
-    char buffer[16];
-
-    while (1) {
-        DHT11_Start();
-        if (DHT11_CheckResponse()) {
-            hum_int = DHT11_ReadByte();
-            DHT11_ReadByte();
-            temp_int = DHT11_ReadByte();
-            DHT11_ReadByte();
-            DHT11_ReadByte();
-
-            LCD_Clear();
-            LCD_String("Temp: ");
-            sprintf(buffer, "%d C", temp_int);
-            LCD_String(buffer);
-
-            LCD_Command(0xC0);
-            LCD_String("Hum: ");
-            sprintf(buffer, "%d %%", hum_int);
-            LCD_String(buffer);
-        }
-        __delay_ms(1000);
-    }
-}
-
-// DHT11 Functions
-void DHT11_Start(void) {
-    TRISB1 = 0;
-    DHT11_PIN = 0;
-    __delay_ms(18);
-    DHT11_PIN = 1;
-    __delay_us(30);
-    TRISB1 = 1;
-}
-
-uint8_t DHT11_CheckResponse(void) {
-    uint8_t response = 0;
-    __delay_us(40);
-    if (DHT11_PIN == 0) {
-        __delay_us(80);
-        if (DHT11_PIN == 1) response = 1;
-        __delay_us(40);
-    }
-    return response;
-}
-
-uint8_t DHT11_ReadByte(void) {
-    uint8_t i, byte = 0;
-    for (i = 0; i < 8; i++) {
-        while (!DHT11_PIN);
-        __delay_us(30);
-        if (DHT11_PIN == 1)
-            byte |= (1 << (7 - i));
-        while (DHT11_PIN);
-    }
-    return byte;
 }
