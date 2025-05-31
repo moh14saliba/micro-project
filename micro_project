@@ -2,19 +2,19 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define _XTAL_FREQ 20000000
+#define _XTAL_FREQ 20000000  // Define the clock frequency (20 MHz)
 
-// Configuration Bits
-#pragma config FOSC = HS
-#pragma config WDTE = OFF
-#pragma config PWRTE = OFF
-#pragma config BOREN = ON
-#pragma config LVP = OFF
-#pragma config CPD = OFF
-#pragma config WRT = OFF
-#pragma config CP = OFF
+// Configuration Bits for PIC16F877A
+#pragma config FOSC = HS     // High-speed oscillator
+#pragma config WDTE = OFF    // Watchdog timer disabled
+#pragma config PWRTE = OFF   // Power-up timer disabled
+#pragma config BOREN = ON    // Brown-out reset enabled
+#pragma config LVP = OFF     // Low-voltage programming disabled
+#pragma config CPD = OFF     // Data EEPROM code protection off
+#pragma config WRT = OFF     // Flash program memory write protection off
+#pragma config CP = OFF      // Code protection off
 
-// LCD Pins
+// LCD Control Pins connected to PORTD
 #define RS RD2
 #define EN RD3
 #define D4 RD4
@@ -22,25 +22,25 @@
 #define D6 RD6
 #define D7 RD7
 
-// DHT11 Data Pin
-#define DHT11_PIN RB1
+// Sensor and output pins on PORTB
+#define DHT11_PIN RB1    // Digital data pin from DHT11 sensor
 
-// Output Pins
-#define RED_LED    RB0
-#define YELLOW_LED RB2
-#define GREEN_LED  RB3
-#define BUZZER     RB4
-#define PUMP       RB6  // Pump control pin
+#define RED_LED    RB0   // Red LED for high temp warning
+#define YELLOW_LED RB2   // Yellow LED for medium temp warning
+#define GREEN_LED  RB3   // Green LED for safe temp
+#define BUZZER     RB4   // Buzzer output
+#define PUMP       RB6   // Water pump control output
 
-// Soil moisture threshold (calibrate this value)
-#define SOIL_MOISTURE_THRESHOLD 400
+// Soil moisture threshold (adjust according to calibration)
+#define SOIL_MOISTURE_THRESHOLD 700
 
-// Function Prototypes
-void LCD_Command(unsigned char);
-void LCD_Char(unsigned char);
+// Function prototypes
+void LCD_Command(unsigned char cmd);
+void LCD_Char(unsigned char data);
 void LCD_Init(void);
-void LCD_String(const char*);
+void LCD_String(const char *str);
 void LCD_Clear(void);
+void beep(void);
 
 void DHT11_Start(void);
 uint8_t DHT11_CheckResponse(void);
@@ -48,177 +48,210 @@ uint8_t DHT11_ReadByte(void);
 
 unsigned int ADC_Read(unsigned char channel);
 
-// Global variables
+// Global variables to hold sensor data
 uint8_t temp_int = 0, hum_int = 0;
 unsigned int soil_moisture = 0;
 
 void main(void) {
-    // Configure pins
-    TRISB1 = 1;     // DHT11 data input
-    TRISB0 = 0;     // Red LED output
-    TRISB2 = 0;     // Yellow LED output
-    TRISB3 = 0;     // Green LED output
-    TRISB4 = 0;     // Buzzer output
-    TRISB6 = 0;     // Pump control output
-    TRISA = 0xFF;   // PORTA as inputs for ADC (AN0)
-    TRISD = 0x00;   // PORTD as outputs for LCD
+    // ======= Setup pins direction =======
+    TRISB1 = 1;      // Set RB1 as input for DHT11 data
+    TRISB0 = 0;      // Set RB0 as output for Red LED
+    TRISB2 = 0;      // Set RB2 as output for Yellow LED
+    TRISB3 = 0;      // Set RB3 as output for Green LED
+    TRISB4 = 0;      // Set RB4 as output for Buzzer
+    TRISB6 = 0;      // Set RB6 as output for Pump control
+    TRISA = 0xFF;    // Set PORTA as input for ADC (soil sensor on AN0)
+    TRISD = 0x00;    // Set PORTD as output for LCD control/data pins
 
-    // Initial outputs off
+    // ======= Initialize all outputs to OFF =======
     RED_LED = 0;
     YELLOW_LED = 0;
     GREEN_LED = 0;
     BUZZER = 0;
     PUMP = 0;
 
+    // ======= Initialize LCD and give some startup delay =======
     LCD_Init();
     __delay_ms(1000);
 
-    char buffer[16];
+    // ======= Welcome message and buzzer beep =======
+    LCD_Clear();
+    LCD_String("Welcome to");
+    LCD_Command(0xC0);  // Move to second line
+    LCD_String("happy farm!");
+    for (int i = 0; i < 3; i++) {
+        beep();          // Buzzer beep function
+        __delay_ms(500); // Pause between beeps
+    }
 
+    char buffer[16]; // Buffer for text display
+
+    // ======= Main program loop =======
     while(1) {
-        // Read DHT11 sensor
-        DHT11_Start();
-        if (DHT11_CheckResponse()) {
-            hum_int = DHT11_ReadByte();
-            DHT11_ReadByte(); // humidity decimal ignored
-            temp_int = DHT11_ReadByte();
-            DHT11_ReadByte(); // temperature decimal ignored
-            DHT11_ReadByte(); // checksum ignored
+        // --- Read temperature and humidity from DHT11 ---
+        DHT11_Start();            // Send start signal to DHT11
+        if (DHT11_CheckResponse()) {  // Check if DHT11 responds
+            hum_int = DHT11_ReadByte();   // Read humidity integer part
+            DHT11_ReadByte();             // Ignore decimal humidity
+            temp_int = DHT11_ReadByte();  // Read temperature integer part
+            DHT11_ReadByte();             // Ignore decimal temperature
+            DHT11_ReadByte();             // Ignore checksum
         }
 
-        // Read soil moisture from ADC (AN0)
-        soil_moisture = ADC_Read(0);
+        // --- Read soil moisture sensor analog value via ADC ---
+        soil_moisture = ADC_Read(0); // Read analog channel 0 (AN0)
 
-        // Display temperature and humidity on LCD first line
+        // --- Display temperature and humidity on LCD first line ---
         LCD_Clear();
-        LCD_String("T:");
-        sprintf(buffer, "%dC H:%d%%", temp_int, hum_int);
+        sprintf(buffer, "T:%dC H:%d%%", temp_int, hum_int);  // Format string
         LCD_String(buffer);
 
-        // Display soil status and pump status on second line
-        LCD_Command(0xC0);
+        // --- Display soil moisture status on LCD second line ---
+        LCD_Command(0xC0);  // Move cursor to second line
         LCD_String("Soil:");
-        if (soil_moisture > SOIL_MOISTURE_THRESHOLD) { // Inverted logic
+        if (soil_moisture > SOIL_MOISTURE_THRESHOLD) { // If soil is dry
             LCD_String("Dry  ");
-            PUMP = 1; // Pump ON
+            PUMP = 1;       // Turn pump ON to water plants
         } else {
             LCD_String("Wet  ");
-            PUMP = 0; // Pump OFF
+            PUMP = 0;       // Turn pump OFF
         }
 
-        // Temperature LED and buzzer logic
+        // --- Control LEDs and buzzer based on temperature ---
         if (temp_int < 25) {
-            GREEN_LED = 1;
+            GREEN_LED = 1;    // Safe temp — green LED ON
             YELLOW_LED = 0;
             RED_LED = 0;
             BUZZER = 0;
         } else if (temp_int == 25) {
             GREEN_LED = 0;
-            YELLOW_LED = 1;
+            YELLOW_LED = 1;   // Warning temp — yellow LED ON
             RED_LED = 0;
             BUZZER = 0;
         } else {
             GREEN_LED = 0;
             YELLOW_LED = 0;
-            RED_LED = 1;
-            BUZZER = 1;
+            RED_LED = 1;      // High temp — red LED ON
+            BUZZER = 1;       // Buzzer sounds warning
         }
 
-        __delay_ms(1000); // Update every 1 second
+        __delay_ms(1000); // Wait 1 second before next reading
     }
 }
 
-// ADC read function for selected channel (0-7)
+// ======= Buzzer beep function =======
+void beep(void) {
+    BUZZER = 1;        // Turn buzzer ON
+    __delay_ms(200);   // Wait 200 milliseconds
+    BUZZER = 0;        // Turn buzzer OFF
+}
+
+// ======= ADC Read function =======
 unsigned int ADC_Read(unsigned char channel) {
-    ADCON0 = (channel << 2) | 1;  // Select channel and enable ADC
-    ADCON1 = 0x80;                // Right justified, Vref = VDD
-    __delay_ms(2);                // Acquisition time
-    ADCON0bits.GO = 1;            // Start conversion
-    while (ADCON0bits.GO);        // Wait for conversion completion
-    return ((ADRESH << 8) + ADRESL);
+    ADCON0 = (channel << 2) | 1;  // Select ADC channel and enable ADC
+    ADCON1 = 0x80;                // Right justify result, Vref=VDD
+    __delay_ms(2);                // Acquisition time to sample
+    ADCON0bits.GO = 1;            // Start ADC conversion
+    while (ADCON0bits.GO);        // Wait for conversion to finish
+    return ((ADRESH << 8) + ADRESL); // Return 10-bit result
 }
 
-// DHT11 sensor functions
+// ======= DHT11 Sensor Start Signal =======
 void DHT11_Start(void) {
-    TRISB1 = 0;
-    DHT11_PIN = 0;
+    TRISB1 = 0;     // Set pin as output
+    DHT11_PIN = 0;  // Pull low for 18 ms to start communication
     __delay_ms(18);
-    DHT11_PIN = 1;
+    DHT11_PIN = 1;  // Pull high for 20-40 us
     __delay_us(30);
-    TRISB1 = 1;
+    TRISB1 = 1;     // Set pin as input to read data
 }
 
+// ======= DHT11 Sensor Response Check =======
 uint8_t DHT11_CheckResponse(void) {
     uint8_t response = 0;
     __delay_us(40);
-    if (DHT11_PIN == 0) {
+    if (DHT11_PIN == 0) {     // Sensor pulls low to acknowledge
         __delay_us(80);
-        if (DHT11_PIN == 1) response = 1;
+        if (DHT11_PIN == 1)   // Then pulls high
+            response = 1;
         __delay_us(40);
     }
     return response;
 }
 
+// ======= Read one byte (8 bits) from DHT11 =======
 uint8_t DHT11_ReadByte(void) {
     uint8_t i, byte = 0;
     for (i = 0; i < 8; i++) {
-        while (!DHT11_PIN);
+        while (!DHT11_PIN);        // Wait for pin to go HIGH
         __delay_us(30);
         if (DHT11_PIN == 1)
-            byte |= (1 << (7 - i));
-        while (DHT11_PIN);
+            byte |= (1 << (7 - i)); // Set bit if signal is HIGH
+        while (DHT11_PIN);         // Wait for pin to go LOW
     }
     return byte;
 }
 
-// LCD control functions
+// ======= LCD command function (send command to LCD) =======
 void LCD_Command(unsigned char cmd) {
-    RS = 0;
-    D4 = (cmd >> 4) & 1;
+    RS = 0;                      // Command mode
+    D4 = (cmd >> 4) & 1;         // Send high nibble
     D5 = (cmd >> 5) & 1;
     D6 = (cmd >> 6) & 1;
     D7 = (cmd >> 7) & 1;
-    EN = 1; __delay_ms(2); EN = 0;
+    EN = 1;
+    __delay_ms(2);
+    EN = 0;
 
-    D4 = cmd & 1;
+    D4 = cmd & 1;                // Send low nibble
     D5 = (cmd >> 1) & 1;
     D6 = (cmd >> 2) & 1;
     D7 = (cmd >> 3) & 1;
-    EN = 1; __delay_ms(2); EN = 0;
+    EN = 1;
+    __delay_ms(2);
+    EN = 0;
 }
 
+// ======= LCD character function (send char to LCD) =======
 void LCD_Char(unsigned char data) {
-    RS = 1;
-    D4 = (data >> 4) & 1;
+    RS = 1;                      // Data mode
+    D4 = (data >> 4) & 1;        // Send high nibble
     D5 = (data >> 5) & 1;
     D6 = (data >> 6) & 1;
     D7 = (data >> 7) & 1;
-    EN = 1; __delay_ms(2); EN = 0;
+    EN = 1;
+    __delay_ms(2);
+    EN = 0;
 
-    D4 = data & 1;
+    D4 = data & 1;               // Send low nibble
     D5 = (data >> 1) & 1;
     D6 = (data >> 2) & 1;
     D7 = (data >> 3) & 1;
-    EN = 1; __delay_ms(2); EN = 0;
+    EN = 1;
+    __delay_ms(2);
+    EN = 0;
 }
 
+// ======= LCD initialization =======
 void LCD_Init(void) {
     __delay_ms(20);
-    LCD_Command(0x02);
-    LCD_Command(0x28);
-    LCD_Command(0x0C);
-    LCD_Command(0x06);
-    LCD_Command(0x01);
+    LCD_Command(0x02);  // Initialize LCD in 4-bit mode
+    LCD_Command(0x28);  // 2 lines, 5x8 font
+    LCD_Command(0x0C);  // Display on, cursor off
+    LCD_Command(0x06);  // Increment cursor
+    LCD_Command(0x01);  // Clear display
     __delay_ms(2);
 }
 
+// ======= LCD string function (display string on LCD) =======
 void LCD_String(const char *str) {
     while (*str) {
         LCD_Char(*str++);
     }
 }
 
+// ======= Clear LCD screen =======
 void LCD_Clear(void) {
-    LCD_Command(0x01);
+    LCD_Command(0x01);  // Clear display command
     __delay_ms(2);
 }
